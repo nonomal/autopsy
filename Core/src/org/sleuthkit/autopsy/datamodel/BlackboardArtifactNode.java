@@ -1,7 +1,7 @@
 /*
- * Autopsy Forensic Browser
+ * Autopsy 
  *
- * Copyright 2012-2021 Basis Technology Corp.
+ * Copyright 2012-2026 Sleuth Kit Labs
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +35,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.MissingResourceException;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -158,6 +159,9 @@ public class BlackboardArtifactNode extends AbstractContentNode<BlackboardArtifa
         BlackboardArtifact.ARTIFACT_TYPE.TSK_INTERESTING_FILE_HIT.getTypeID(),
         BlackboardArtifact.ARTIFACT_TYPE.TSK_INTERESTING_ITEM.getTypeID()
     };
+
+    private static final java.util.Collection<? extends ArtifactPropertyEnricher> ENRICHERS
+            = Lookup.getDefault().lookupAll(ArtifactPropertyEnricher.class);
 
     private final BlackboardArtifact artifact;
     private final BlackboardArtifact.Type artifactType;
@@ -1150,6 +1154,23 @@ public class BlackboardArtifactNode extends AbstractContentNode<BlackboardArtifa
             backgroundTasksPool.submit(scoTask);
         }
 
+        for (ArtifactPropertyEnricher enricher : ENRICHERS) {
+            try {
+                Optional<Sheet.Set> enrichmentSet = enricher.getEnrichment(artifact);
+                enrichmentSet.ifPresent(s -> {
+                    if (sheet.get(s.getName()) != null) {
+                        logger.log(Level.WARNING, String.format("Enricher %s returned a Sheet.Set with duplicate name '%s' for artifact %d; skipping to avoid overwriting existing properties",
+                                enricher.getClass().getName(), s.getName(), artifact.getArtifactID()));
+                    } else {
+                        sheet.put(s);
+                    }
+                });
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, String.format("Error getting property enrichment from %s for artifact %d",
+                        enricher.getClass().getName(), artifact.getArtifactID()), ex);
+            }
+        }
+
         return sheet;
     }
 
@@ -1299,8 +1320,15 @@ public class BlackboardArtifactNode extends AbstractContentNode<BlackboardArtifa
                         || attributeTypeID == ATTRIBUTE_TYPE.TSK_KEYWORD_SEARCH_TYPE.getTypeID()
                         || attribute.getValueType() == BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.JSON) {
                     /*
-                     * Do nothing.
+                     * For Cyber Triage's CT_JSON_DATA_ATTRIBUTE, parse the JSON
+                     * and expand each field into the property map. All other
+                     * skipped attributes (including other JSON types) are ignored.
                      */
+                    if (attribute.getValueType() == BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.JSON
+                            && CyberTriageData.CT_JSON_ATTRIBUTE_TYPE_NAME.equals(
+                                    attribute.getAttributeType().getTypeName())) {
+                        CyberTriageData.addCtJsonProperties(map, attribute.getValueString());
+                    }
                 } else if (artifact.getArtifactTypeID() == BlackboardArtifact.ARTIFACT_TYPE.TSK_EMAIL_MSG.getTypeID()) {
                     addEmailMsgProperty(map, attribute);
                 } else if (attribute.getAttributeType().getValueType() == BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.DATETIME) {
